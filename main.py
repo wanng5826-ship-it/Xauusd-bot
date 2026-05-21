@@ -17,7 +17,6 @@ from datetime import datetime
 
 BOT_TOKEN      = os.environ.get("BOT_TOKEN", "")
 CHAT_ID        = os.environ.get("CHAT_ID", "")
-AV_API_KEY     = os.environ.get("AV_API_KEY", "")
 
 N_CANDLES      = int(os.environ.get("N_CANDLES", "200"))
 EMA_FAST       = int(os.environ.get("EMA_FAST", "9"))
@@ -28,50 +27,54 @@ SR_NEAR_ZONE   = float(os.environ.get("SR_NEAR_ZONE", "2.50"))
 CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "60"))
 
 def get_candles():
-    print("[DATA] Mengambil data dari Alpha Vantage...")
-    url = "https://www.alphavantage.co/query"
+    print("[DATA] Mengambil data dari Finnhub...")
+    FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY", "")
+    
+    import time as t
+    now = int(t.time())
+    from_ts = now - (N_CANDLES * 60 * 2)
+    
+    url = "https://finnhub.io/api/v1/forex/candle"
     params = {
-        "function"    : "FX_INTRADAY",
-        "from_symbol" : "XAU",
-        "to_symbol"   : "USD",
-        "interval"    : "1min",
-        "outputsize"  : "full",
-        "apikey"      : AV_API_KEY,
+        "symbol"    : "OANDA:XAU_USD",
+        "resolution": "1",
+        "from"      : from_ts,
+        "to"        : now,
+        "token"     : FINNHUB_API_KEY,
     }
     try:
         r = requests.get(url, params=params, timeout=20)
         data = r.json()
-        if "Error Message" in data:
-            print(f"[AV ERROR] {data['Error Message']}")
+
+        if data.get("s") == "no_data":
+            print("[FINNHUB] Tidak ada data")
             return None
-        if "Note" in data:
-            print("[AV] Rate limit tercapai, tunggu 1 menit...")
-            time.sleep(60)
+
+        if "c" not in data:
+            print(f"[FINNHUB ERROR] {data}")
             return None
-        key = "Time Series FX (1min)"
-        if key not in data:
-            print(f"[AV ERROR] Key tidak ditemukan: {list(data.keys())}")
-            return None
-        ts = data[key]
+
         rows = []
-        for dt_str, val in ts.items():
+        for i in range(len(data["c"])):
             rows.append({
-                "time"  : pd.to_datetime(dt_str),
-                "open"  : float(val["1. open"]),
-                "high"  : float(val["2. high"]),
-                "low"   : float(val["3. low"]),
-                "close" : float(val["4. close"]),
+                "time"  : pd.to_datetime(data["t"][i], unit="s"),
+                "open"  : float(data["o"][i]),
+                "high"  : float(data["h"][i]),
+                "low"   : float(data["l"][i]),
+                "close" : float(data["c"][i]),
                 "volume": 0,
             })
+
         df = pd.DataFrame(rows)
         df = df.sort_values("time").reset_index(drop=True)
         df = df.tail(N_CANDLES).reset_index(drop=True)
-        print(f"[DATA] {len(df)} candle dari Alpha Vantage (XAUUSD 1 menit)")
+        print(f"[DATA] {len(df)} candle dari Finnhub (XAUUSD 1 menit)")
         return df
-    except Exception as e:
-        print(f"[AV ERROR] {e}")
-        return None
 
+    except Exception as e:
+        print(f"[FINNHUB ERROR] {e}")
+        return None
+      
 def hitung_ema(series, period):
     return series.ewm(span=period, adjust=False).mean()
 
