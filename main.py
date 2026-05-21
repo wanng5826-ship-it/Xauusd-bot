@@ -20,7 +20,7 @@ from datetime import datetime
 # ─────────────────────────────────────────────────────
 
 BOT_TOKEN  = "8874771733:AAEJPa9h1Zz1ZH6VgKomBSPNfwhz-uJsNvI"
-CHAT_ID    = "8874771733"
+CHAT_ID    = "7879820766"
 
 N_CANDLES      = int(os.environ.get("N_CANDLES", "200"))
 EMA_FAST       = int(os.environ.get("EMA_FAST", "9"))
