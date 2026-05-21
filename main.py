@@ -663,7 +663,7 @@ def main():
         "🧠 AI          : Groq Llama3 (Makro Ekonomi)\n"
         "📰 News        : NewsAPI\n"
         "📊 Ekonomi     : FRED API (Fed Rate, CPI, NFP, GDP)\n"
-        "🕐 Session     : London & New York only\n"
+        "🕐 Session     : London, New York & Asia\n"
         f"🔢 Max Sinyal  : {MAX_SIGNALS_PER_CYCLE} per siklus\n"
         "━━━━━━━━━━━━━━━━━━━━━━━\n"
         "✅ Bot berjalan 24 jam di Railway!"
