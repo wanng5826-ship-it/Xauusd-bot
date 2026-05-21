@@ -1,8 +1,9 @@
+cat > /mnt/user-data/outputs/xauusd-bot/main.py << 'ENDOFFILE'
 """
 =======================================================
-  XAUUSD Counter-Trend Engulfing Bot  —  v3.0
+  XAUUSD Counter-Trend Engulfing Bot  —  v4.0
   Deploy   : Railway (via GitHub)
-  Data     : TradingView (requests langsung)
+  Data     : Alpha Vantage (live XAUUSD 1 menit)
   Timeframe: 1 Menit
   Logika   : Engulfing BERLAWANAN trend + S/R 200 candle
   Notif    : Telegram Bot
@@ -16,11 +17,12 @@ import pandas as pd
 from datetime import datetime
 
 # ─────────────────────────────────────────────────────
-#  ⚙️  KONFIGURASI — dibaca dari Environment Variable Railway
+#  ⚙️  KONFIGURASI
 # ─────────────────────────────────────────────────────
 
-BOT_TOKEN  = "8874771733:AAEJPa9h1Zz1ZH6VgKomBSPNfwhz-uJsNvI"
-CHAT_ID    = "7879820766"
+BOT_TOKEN      = os.environ.get("BOT_TOKEN", "")
+CHAT_ID        = os.environ.get("CHAT_ID", "")
+AV_API_KEY     = os.environ.get("AV_API_KEY", "IMZQ2A4YPAD5VSTN")
 
 N_CANDLES      = int(os.environ.get("N_CANDLES", "200"))
 EMA_FAST       = int(os.environ.get("EMA_FAST", "9"))
@@ -31,76 +33,65 @@ SR_NEAR_ZONE   = float(os.environ.get("SR_NEAR_ZONE", "2.50"))
 CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "60"))
 
 # ─────────────────────────────────────────────────────
-#  📡  AMBIL DATA DARI TRADINGVIEW
+#  📡  AMBIL DATA DARI ALPHA VANTAGE
 # ─────────────────────────────────────────────────────
 
-def get_candles_tv():
-    now_ts  = int(time.time())
-    from_ts = now_ts - (N_CANDLES * 60) - 3600
-
+def get_candles():
+    """
+    Ambil data XAUUSD 1 menit dari Alpha Vantage.
+    Simbol: XAU/USD (spot gold)
+    """
+    print("[DATA] Mengambil data dari Alpha Vantage...")
+    url = "https://www.alphavantage.co/query"
     params = {
-        "symbol"      : "OANDA:XAUUSD",
-        "resolution"  : "1",
-        "from"        : from_ts,
-        "to"          : now_ts,
-        "currencyCode": "USD",
-    }
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36",
-        "Referer"   : "https://www.tradingview.com/",
-        "Origin"    : "https://www.tradingview.com",
-        "Accept"    : "application/json",
+        "function"    : "FX_INTRADAY",
+        "from_symbol" : "XAU",
+        "to_symbol"   : "USD",
+        "interval"    : "1min",
+        "outputsize"  : "full",
+        "apikey"      : AV_API_KEY,
     }
 
     try:
-        r = requests.get(
-            "https://data.tradingview.com/datafeed/udf/history",
-            params=params, headers=headers, timeout=15
-        )
+        r = requests.get(url, params=params, timeout=20)
         data = r.json()
 
-        if data.get("s") != "ok":
-            print(f"[TV] Response bukan ok: {data.get('s')} — coba fallback")
-            return get_candles_fallback()
+        # Cek error
+        if "Error Message" in data:
+            print(f"[AV ERROR] {data['Error Message']}")
+            return None
 
-        df = pd.DataFrame({
-            "time"  : pd.to_datetime(data["t"], unit="s"),
-            "open"  : data["o"],
-            "high"  : data["h"],
-            "low"   : data["l"],
-            "close" : data["c"],
-            "volume": data.get("v", [0] * len(data["t"])),
-        })
-        df.dropna(inplace=True)
+        if "Note" in data:
+            print("[AV] Rate limit tercapai, tunggu 1 menit...")
+            time.sleep(60)
+            return None
+
+        key = "Time Series FX (1min)"
+        if key not in data:
+            print(f"[AV ERROR] Key tidak ditemukan: {list(data.keys())}")
+            return None
+
+        ts = data[key]
+        rows = []
+        for dt_str, val in ts.items():
+            rows.append({
+                "time"  : pd.to_datetime(dt_str),
+                "open"  : float(val["1. open"]),
+                "high"  : float(val["2. high"]),
+                "low"   : float(val["3. low"]),
+                "close" : float(val["4. close"]),
+                "volume": 0,
+            })
+
+        df = pd.DataFrame(rows)
+        df = df.sort_values("time").reset_index(drop=True)
         df = df.tail(N_CANDLES).reset_index(drop=True)
-        print(f"[DATA] {len(df)} candle dari TradingView")
+
+        print(f"[DATA] {len(df)} candle dari Alpha Vantage (XAUUSD 1 menit)")
         return df
 
     except Exception as e:
-        print(f"[TV ERROR] {e} — coba fallback")
-        return get_candles_fallback()
-
-
-def get_candles_fallback():
-    print("[FALLBACK] Mencoba Stooq...")
-    try:
-        r = requests.get(
-            "https://stooq.com/q/d/l/?s=xauusd&i=m",
-            headers={"User-Agent": "Mozilla/5.0"}, timeout=15
-        )
-        from io import StringIO
-        df = pd.read_csv(StringIO(r.text))
-        df.columns = [c.lower() for c in df.columns]
-        df["time"] = pd.to_datetime(
-            df["date"].astype(str) + " " + df["time"].astype(str)
-        )
-        df = df[["time", "open", "high", "low", "close", "volume"]]
-        df.dropna(inplace=True)
-        df = df.sort_values("time").tail(N_CANDLES).reset_index(drop=True)
-        print(f"[FALLBACK] {len(df)} candle dari Stooq")
-        return df
-    except Exception as e:
-        print(f"[FALLBACK ERROR] {e}")
+        print(f"[AV ERROR] {e}")
         return None
 
 # ─────────────────────────────────────────────────────
@@ -283,21 +274,22 @@ def format_sr(sup, res):
 
 def main():
     print("=" * 55)
-    print("  XAUUSD Counter-Trend Bot  v3.0  [Railway]")
+    print("  XAUUSD Counter-Trend Bot  v4.0  [Railway]")
+    print(f"  Data    : Alpha Vantage (XAUUSD live 1 menit)")
     print(f"  Candle  : {N_CANDLES}  |  EMA {EMA_FAST}/{EMA_SLOW}")
     print(f"  Interval: {CHECK_INTERVAL}s")
     print("=" * 55)
 
     if not BOT_TOKEN or not CHAT_ID:
-        print("[ERROR] BOT_TOKEN / CHAT_ID belum diset di environment!")
+        print("[ERROR] BOT_TOKEN / CHAT_ID belum diset!")
         return
 
     send_telegram(
-        "🤖 <b>XAUUSD Bot v3 — ONLINE di Railway!</b>\n"
+        "🤖 <b>XAUUSD Bot v4 — ONLINE di Railway!</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 Pair      : OANDA:XAUUSD\n"
+        f"📊 Pair      : XAUUSD\n"
         f"⏱️ Timeframe : 1 Menit\n"
-        f"📈 Data      : TradingView ({N_CANDLES} candle)\n"
+        f"📈 Data      : Alpha Vantage ({N_CANDLES} candle)\n"
         f"🔍 Strategi  : Engulfing counter-trend + S/R\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"✅ Bot berjalan 24 jam di Railway!"
@@ -309,10 +301,10 @@ def main():
         now_str = datetime.now().strftime("%H:%M:%S")
         try:
             print(f"\n[{now_str}] Cek sinyal...")
-            df = get_candles_tv()
+            df = get_candles()
 
             if df is None or len(df) < 50:
-                print("[WARN] Data kurang, skip...")
+                print("[WARN] Data kurang, coba lagi...")
                 time.sleep(CHECK_INTERVAL)
                 continue
 
@@ -376,3 +368,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+ENDOFFILE
+echo "Done: $?"
