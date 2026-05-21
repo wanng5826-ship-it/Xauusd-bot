@@ -1,10 +1,10 @@
 """
 =======================================================
-  SMC Multi-Pair Trading Bot  —  v5.0
-  Pairs    : XAUUSD, USDJPY, AUDCAD, EURJPY
+  SMC Multi-Pair Bot  —  v6.0
+  Pairs    : 18 pair forex + komoditas
   Strategy : Smart Money Concept (SMC)
-  AI       : Groq (Llama3) untuk analisis fundamental
-  Data     : yfinance
+  AI       : Groq Llama3 (analisis makro ekonomi)
+  Data     : yfinance + FRED API + NewsAPI
   Notif    : Telegram
 =======================================================
 """
@@ -23,6 +23,7 @@ BOT_TOKEN      = os.environ.get("BOT_TOKEN", "")
 CHAT_ID        = os.environ.get("CHAT_ID", "")
 GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "")
 NEWS_API_KEY   = os.environ.get("NEWS_API_KEY", "")
+FRED_API_KEY   = os.environ.get("FRED_API_KEY", "")
 CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "300"))
 
 PAIRS = {
@@ -47,7 +48,7 @@ PAIRS = {
 }
 
 # ─────────────────────────────────────────────────────
-#  📡  AMBIL DATA
+#  📡  AMBIL DATA CANDLE
 # ─────────────────────────────────────────────────────
 def get_data(symbol, interval, period):
     try:
@@ -69,12 +70,10 @@ def get_data(symbol, interval, period):
 #  📊  SMC ANALYSIS
 # ─────────────────────────────────────────────────────
 def detect_structure(df):
-    """Deteksi HH/HL (uptrend) atau LL/LH (downtrend)"""
     if len(df) < 10:
         return "SIDEWAYS"
     highs = df["high"].values
     lows  = df["low"].values
-    n = len(df)
     hh = highs[-1] > highs[-3] and highs[-3] > highs[-5]
     hl = lows[-1]  > lows[-3]  and lows[-3]  > lows[-5]
     ll = lows[-1]  < lows[-3]  and lows[-3]  < lows[-5]
@@ -83,47 +82,36 @@ def detect_structure(df):
         return "UPTREND"
     elif ll and lh:
         return "DOWNTREND"
-    else:
-        return "SIDEWAYS"
+    return "SIDEWAYS"
 
 def detect_liquidity_sweep(df, structure):
-    """Deteksi liquidity sweep + rejection"""
     if len(df) < 5:
         return False, None
     prev_high = df["high"].iloc[-4:-1].max()
     prev_low  = df["low"].iloc[-4:-1].min()
-    curr      = df.iloc[-1]
-    prev      = df.iloc[-2]
+    curr = df.iloc[-1]
     if structure == "DOWNTREND":
-        swept = curr["high"] >= prev_high
-        rejected = curr["close"] < prev_high
-        if swept and rejected:
+        if curr["high"] >= prev_high and curr["close"] < prev_high:
             return True, prev_high
     elif structure == "UPTREND":
-        swept = curr["low"] <= prev_low
-        rejected = curr["close"] > prev_low
-        if swept and rejected:
+        if curr["low"] <= prev_low and curr["close"] > prev_low:
             return True, prev_low
     return False, None
 
 def detect_bos(df, structure):
-    """Deteksi Break of Structure"""
     if len(df) < 6:
         return False, None
     if structure == "UPTREND":
         prev_high = df["high"].iloc[-5:-2].max()
-        curr_high = df["high"].iloc[-1]
-        if curr_high > prev_high:
+        if df["high"].iloc[-1] > prev_high:
             return True, prev_high
     elif structure == "DOWNTREND":
         prev_low = df["low"].iloc[-5:-2].min()
-        curr_low = df["low"].iloc[-1]
-        if curr_low < prev_low:
+        if df["low"].iloc[-1] < prev_low:
             return True, prev_low
     return False, None
 
 def detect_fvg(df, structure):
-    """Deteksi Fair Value Gap"""
     if len(df) < 3:
         return False, None, None
     for i in range(len(df)-3, max(len(df)-10, 0), -1):
@@ -133,20 +121,17 @@ def detect_fvg(df, structure):
             gap_low  = c1["high"]
             gap_high = c3["low"]
             if gap_high > gap_low:
-                untouched = df["low"].iloc[i+2:].min() > gap_low
-                if untouched:
+                if df["low"].iloc[i+2:].min() > gap_low:
                     return True, round(gap_low, 4), round(gap_high, 4)
         elif structure == "DOWNTREND":
             gap_high = c1["low"]
             gap_low  = c3["high"]
             if gap_low < gap_high:
-                untouched = df["high"].iloc[i+2:].max() < gap_high
-                if untouched:
+                if df["high"].iloc[i+2:].max() < gap_high:
                     return True, round(gap_low, 4), round(gap_high, 4)
     return False, None, None
 
 def confirm_entry(df, structure):
-    """Konfirmasi candle engulfing di TF kecil"""
     if len(df) < 2:
         return False
     prev = df.iloc[-2]
@@ -166,7 +151,6 @@ def confirm_entry(df, structure):
     return False
 
 def calc_sl_tp(df, structure, sweep_level):
-    """Hitung SL dan TP"""
     price = df["close"].iloc[-1]
     atr   = (df["high"] - df["low"]).tail(14).mean()
     if structure == "UPTREND":
@@ -180,64 +164,151 @@ def calc_sl_tp(df, structure, sweep_level):
     return action, round(price, 4), sl, tp
 
 # ─────────────────────────────────────────────────────
-#  📰  BERITA + GROQ AI
+#  📰  BERITA
 # ─────────────────────────────────────────────────────
 def get_news(pair):
     keywords = {
-        "XAUUSD": "gold XAU USD",
-        "USDJPY": "USD JPY Japan",
-        "AUDCAD": "AUD CAD Australia Canada",
-        "EURJPY": "EUR JPY Euro Japan",
+        "XAUUSD": "gold XAU USD Federal Reserve",
+        "USDJPY": "USD JPY Bank of Japan Fed",
+        "AUDCAD": "AUD CAD Australia Canada oil",
+        "EURJPY": "EUR JPY Euro Japan ECB",
+        "EURUSD": "EUR USD Euro ECB Federal Reserve",
+        "GBPUSD": "GBP USD Bank of England Fed",
+        "USDCHF": "USD CHF Swiss National Bank",
+        "USDCAD": "USD CAD Canada oil Bank of Canada",
+        "AUDUSD": "AUD USD Australia RBA",
+        "NZDUSD": "NZD USD New Zealand RBNZ",
+        "GBPJPY": "GBP JPY Bank of England Japan",
+        "CADJPY": "CAD JPY Canada Japan oil",
+        "CHFJPY": "CHF JPY Swiss Japan",
+        "EURGBP": "EUR GBP ECB Bank of England",
+        "EURAUD": "EUR AUD ECB Australia",
+        "GBPAUD": "GBP AUD Britain Australia",
+        "XAGUSD": "silver XAG USD commodities",
+        "USOIL" : "crude oil WTI OPEC",
     }
     kw = keywords.get(pair, "forex")
     try:
-        url = "https://newsapi.org/v2/everything"
-        params = {
-            "q"        : kw,
-            "language" : "en",
-            "sortBy"   : "publishedAt",
-            "pageSize" : 3,
-            "apiKey"   : NEWS_API_KEY,
-        }
-        r = requests.get(url, params=params, timeout=10)
-        data = r.json()
-        articles = data.get("articles", [])
-        headlines = [a["title"] for a in articles[:3]]
-        return headlines
+        r = requests.get(
+            "https://newsapi.org/v2/everything",
+            params={
+                "q"       : kw,
+                "language": "en",
+                "sortBy"  : "publishedAt",
+                "pageSize": 3,
+                "apiKey"  : NEWS_API_KEY,
+            },
+            timeout=10
+        )
+        articles = r.json().get("articles", [])
+        return [a["title"] for a in articles[:3]]
     except Exception as e:
         print(f"[NEWS ERROR] {e}")
         return []
 
-def analyze_with_groq(pair, structure, headlines, action):
-    if not GROQ_API_KEY or not headlines:
-        return "Analisis fundamental tidak tersedia."
+# ─────────────────────────────────────────────────────
+#  📊  DATA EKONOMI FRED
+# ─────────────────────────────────────────────────────
+def get_fred_data():
+    """Ambil data ekonomi makro dari FRED API"""
+    indicators = {
+        "Fed Rate"   : "FEDFUNDS",
+        "CPI US"     : "CPIAUCSL",
+        "NFP"        : "PAYEMS",
+        "GDP US"     : "GDP",
+        "DXY"        : "DTWEXBGS",
+        "Unemployment": "UNRATE",
+    }
+    result = {}
+    for name, series_id in indicators.items():
+        try:
+            r = requests.get(
+                "https://api.stlouisfed.org/fred/series/observations",
+                params={
+                    "series_id"    : series_id,
+                    "api_key"      : FRED_API_KEY,
+                    "file_type"    : "json",
+                    "sort_order"   : "desc",
+                    "limit"        : 2,
+                },
+                timeout=10
+            )
+            obs = r.json().get("observations", [])
+            if len(obs) >= 2:
+                latest = obs[0]["value"]
+                prev   = obs[1]["value"]
+                result[name] = {
+                    "latest": latest,
+                    "prev"  : prev,
+                    "change": "NAIK" if float(latest) > float(prev) else "TURUN" if float(latest) < float(prev) else "SAMA",
+                }
+        except Exception as e:
+            print(f"[FRED ERROR] {name}: {e}")
+    return result
+
+def format_fred_data(fred_data):
+    if not fred_data:
+        return "Data ekonomi tidak tersedia"
+    lines = []
+    arrows = {"NAIK": "⬆️", "TURUN": "⬇️", "SAMA": "➡️"}
+    for name, data in fred_data.items():
+        arrow = arrows.get(data["change"], "")
+        lines.append(f"• {name}: {data['latest']} {arrow} (sebelumnya: {data['prev']})")
+    return "\n".join(lines)
+
+# ─────────────────────────────────────────────────────
+#  🧠  GROQ AI ANALISIS MAKRO
+# ─────────────────────────────────────────────────────
+def analyze_with_groq(pair, structure, action, headlines, fred_data):
+    if not GROQ_API_KEY:
+        return "Analisis AI tidak tersedia."
     try:
-        news_text = "\n".join([f"- {h}" for h in headlines])
-        prompt = f"""Kamu adalah analis trading forex profesional.
+        news_text = "\n".join([f"- {h}" for h in headlines]) if headlines else "Tidak ada berita terkini."
+
+        fred_text = ""
+        if fred_data:
+            fred_text = f"""
+Data Ekonomi Makro Terkini:
+- Fed Rate: {fred_data.get('Fed Rate', {}).get('latest', 'N/A')}% ({fred_data.get('Fed Rate', {}).get('change', 'N/A')})
+- CPI US: {fred_data.get('CPI US', {}).get('latest', 'N/A')} ({fred_data.get('CPI US', {}).get('change', 'N/A')})
+- NFP: {fred_data.get('NFP', {}).get('latest', 'N/A')}K ({fred_data.get('NFP', {}).get('change', 'N/A')})
+- GDP US: {fred_data.get('GDP', {}).get('latest', 'N/A')} ({fred_data.get('GDP', {}).get('change', 'N/A')})
+- Unemployment: {fred_data.get('Unemployment', {}).get('latest', 'N/A')}% ({fred_data.get('Unemployment', {}).get('change', 'N/A')})
+- DXY: {fred_data.get('DXY', {}).get('latest', 'N/A')} ({fred_data.get('DXY', {}).get('change', 'N/A')})"""
+
+        prompt = f"""Kamu adalah analis trading forex dan ekonomi makro profesional tingkat senior.
+
 Pair: {pair}
-Struktur teknikal: {structure}
-Sinyal teknikal: {action}
-Berita terkini:
+Sinyal Teknikal: {action}
+Struktur Market: {structure}
+
+{fred_text}
+
+Berita Terkini:
 {news_text}
 
-Berikan analisis singkat (3-4 kalimat) apakah berita ini mendukung atau berlawanan dengan sinyal {action}. 
-Jawab dalam Bahasa Indonesia. Langsung ke poin, tanpa intro."""
+Tugas kamu:
+1. Analisis apakah kondisi ekonomi makro mendukung sinyal {action} pada {pair}
+2. Jelaskan dampak data Fed Rate, CPI, NFP terhadap {pair}
+3. Apakah fundamental SEJALAN atau BERLAWANAN dengan sinyal teknikal?
+4. Berikan prediksi arah harga berdasarkan fundamental
+
+Jawab dalam Bahasa Indonesia, maksimal 5 kalimat, langsung ke poin tanpa intro."""
 
         r = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={
                 "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json"
+                "Content-Type" : "application/json"
             },
             json={
-                "model": "llama3-8b-8192",
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 200,
+                "model"     : "llama3-8b-8192",
+                "messages"  : [{"role": "user", "content": prompt}],
+                "max_tokens": 300,
             },
             timeout=15
         )
-        result = r.json()
-        return result["choices"][0]["message"]["content"].strip()
+        return r.json()["choices"][0]["message"]["content"].strip()
     except Exception as e:
         print(f"[GROQ ERROR] {e}")
         return "Analisis AI tidak tersedia saat ini."
@@ -311,17 +382,17 @@ def analyze_pair(pair, symbol):
 
     print(f"[{pair}] ✅ SINYAL {action} | Entry:{entry} SL:{sl} TP:{tp}")
     return {
-        "pair"      : pair,
-        "action"    : action,
-        "entry"     : entry,
-        "sl"        : sl,
-        "tp"        : tp,
-        "rr"        : rr,
-        "structure" : structure,
-        "sweep"     : sweep_level,
-        "bos"       : bos_level,
-        "fvg_low"   : fvg_low,
-        "fvg_high"  : fvg_high,
+        "pair"     : pair,
+        "action"   : action,
+        "entry"    : entry,
+        "sl"       : sl,
+        "tp"       : tp,
+        "rr"       : rr,
+        "structure": structure,
+        "sweep"    : sweep_level,
+        "bos"      : bos_level,
+        "fvg_low"  : fvg_low,
+        "fvg_high" : fvg_high,
     }
 
 # ─────────────────────────────────────────────────────
@@ -329,8 +400,8 @@ def analyze_pair(pair, symbol):
 # ─────────────────────────────────────────────────────
 def main():
     print("=" * 55)
-    print("  SMC Multi-Pair Bot  v5.0  [Railway]")
-    print(f"  Pairs   : {', '.join(PAIRS.keys())}")
+    print("  SMC Multi-Pair Bot  v6.0  [Railway]")
+    print(f"  Pairs   : {len(PAIRS)} pairs aktif")
     print(f"  Interval: {CHECK_INTERVAL}s")
     print("=" * 55)
 
@@ -339,21 +410,31 @@ def main():
         return
 
     send_telegram(
-        "🤖 <b>SMC Multi-Pair Bot v5 — ONLINE!</b>\n"
+        "🤖 <b>SMC Multi-Pair Bot v6 — ONLINE!</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 Pairs     : {', '.join(PAIRS.keys())}\n"
+        f"📊 Pairs     : {len(PAIRS)} pair aktif\n"
         "📈 Strategy  : Smart Money Concept\n"
-        "🧠 AI        : Groq Llama3\n"
+        "🧠 AI        : Groq Llama3 (Makro Ekonomi)\n"
         "📰 News      : NewsAPI\n"
+        "📊 Ekonomi   : FRED API (Fed Rate, CPI, NFP, GDP)\n"
         "━━━━━━━━━━━━━━━━━━━━━━━\n"
         "✅ Bot berjalan 24 jam di Railway!"
     )
 
     sent_signals = {}
+    fred_data    = {}
+    fred_timer   = 0
 
     while True:
         now_str = datetime.now().strftime("%H:%M:%S")
         print(f"\n[{now_str}] Scanning {len(PAIRS)} pairs...")
+
+        # Update FRED data setiap 1 jam
+        if time.time() - fred_timer > 3600:
+            print("[FRED] Update data ekonomi...")
+            fred_data  = get_fred_data()
+            fred_timer = time.time()
+            print(f"[FRED] {len(fred_data)} indikator berhasil diambil")
 
         for pair, symbol in PAIRS.items():
             try:
@@ -367,14 +448,16 @@ def main():
                     continue
                 sent_signals[pair] = sig_key
 
-                headlines = get_news(pair)
+                headlines   = get_news(pair)
                 ai_analysis = analyze_with_groq(
-                    pair, result["structure"], headlines, result["action"]
+                    pair, result["structure"],
+                    result["action"], headlines, fred_data
                 )
 
-                emj = "🟢" if result["action"] == "BUY" else "🔴"
+                emj       = "🟢" if result["action"] == "BUY" else "🔴"
                 trend_emj = "📈" if result["structure"] == "UPTREND" else "📉"
-                news_text = "\n".join([f"   • {h[:60]}..." for h in headlines]) if headlines else "   • Tidak tersedia"
+                news_text = "\n".join([f"   • {h[:55]}..." for h in headlines]) if headlines else "   • Tidak tersedia"
+                fred_text = format_fred_data(fred_data) if fred_data else "   • Tidak tersedia"
 
                 msg = (
                     f"{emj} <b>SINYAL {result['action']} — {pair}</b>\n"
@@ -386,15 +469,17 @@ def main():
                     f"⚖️ R:R Ratio  : 1:{result['rr']}\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"{trend_emj} <b>Struktur:</b> {result['structure']}\n"
-                    f"💧 Liquidity Sweep: {result['sweep']}\n"
-                    f"🔀 BOS Level      : {result['bos']}\n"
-                    f"📦 FVG Zone       : {result['fvg_low']} – {result['fvg_high']}\n"
+                    f"💧 Liquidity Sweep : {result['sweep']}\n"
+                    f"🔀 BOS Level       : {result['bos']}\n"
+                    f"📦 FVG Zone        : {result['fvg_low']} – {result['fvg_high']}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📊 <b>Data Ekonomi Makro:</b>\n{fred_text}\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"📰 <b>Berita Terkini:</b>\n{news_text}\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"🧠 <b>Analisis AI:</b>\n{ai_analysis}\n"
+                    f"🧠 <b>Analisis AI Makro:</b>\n{ai_analysis}\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"✅ <b>SEMUA SYARAT SMC TERPENUHI!</b>\n"
+                    f"✅ <b>SEMUA SYARAT TERPENUHI!</b>\n"
                     f"⚠️ Risiko maks 1-2% per trade!"
                 )
                 send_telegram(msg)
