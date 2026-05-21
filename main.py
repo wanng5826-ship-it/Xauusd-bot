@@ -27,52 +27,33 @@ SR_NEAR_ZONE   = float(os.environ.get("SR_NEAR_ZONE", "2.50"))
 CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "60"))
 
 def get_candles():
-    print("[DATA] Mengambil data dari Finnhub...")
-    FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY", "")
-    
-    import time as t
-    now = int(t.time())
-    from_ts = now - (N_CANDLES * 60 * 2)
-    
-    url = "https://finnhub.io/api/v1/forex/candle"
-    params = {
-        "symbol"    : "OANDA:XAU_USD",
-        "resolution": "1",
-        "from"      : from_ts,
-        "to"        : now,
-        "token"     : FINNHUB_API_KEY,
-    }
+    print("[DATA] Mengambil data dari Yahoo Finance (yfinance)...")
     try:
-        r = requests.get(url, params=params, timeout=20)
-        data = r.json()
+        import yfinance as yf
+        ticker = yf.Ticker("GC=F")
+        df = ticker.history(period="1d", interval="1m")
 
-        if data.get("s") == "no_data":
-            print("[FINNHUB] Tidak ada data")
+        if df is None or len(df) < 10:
+            print("[YF ERROR] Data kosong")
             return None
 
-        if "c" not in data:
-            print(f"[FINNHUB ERROR] {data}")
-            return None
-
-        rows = []
-        for i in range(len(data["c"])):
-            rows.append({
-                "time"  : pd.to_datetime(data["t"][i], unit="s"),
-                "open"  : float(data["o"][i]),
-                "high"  : float(data["h"][i]),
-                "low"   : float(data["l"][i]),
-                "close" : float(data["c"][i]),
-                "volume": 0,
-            })
-
-        df = pd.DataFrame(rows)
-        df = df.sort_values("time").reset_index(drop=True)
+        df = df.reset_index()
+        df = df.rename(columns={
+            "Datetime": "time",
+            "Open"    : "open",
+            "High"    : "high",
+            "Low"     : "low",
+            "Close"   : "close",
+            "Volume"  : "volume",
+        })
+        df["time"] = pd.to_datetime(df["time"]).dt.tz_localize(None)
+        df = df[["time","open","high","low","close","volume"]]
         df = df.tail(N_CANDLES).reset_index(drop=True)
-        print(f"[DATA] {len(df)} candle dari Finnhub (XAUUSD 1 menit)")
+        print(f"[DATA] {len(df)} candle dari Yahoo Finance (XAUUSD 1 menit)")
         return df
 
     except Exception as e:
-        print(f"[FINNHUB ERROR] {e}")
+        print(f"[YF ERROR] {e}")
         return None
       
 def hitung_ema(series, period):
