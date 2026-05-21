@@ -26,10 +26,24 @@ NEWS_API_KEY   = os.environ.get("NEWS_API_KEY", "")
 CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "300"))
 
 PAIRS = {
-    "XAUUSD": "GC=F",
-    "USDJPY": "JPY=X",
-    "AUDCAD": "AUDCAD=X",
-    "EURJPY": "EURJPY=X",
+    "XAUUSD" : "GC=F",
+    "USDJPY" : "JPY=X",
+    "AUDCAD" : "AUDCAD=X",
+    "EURJPY" : "EURJPY=X",
+    "EURUSD" : "EURUSD=X",
+    "GBPUSD" : "GBPUSD=X",
+    "USDCHF" : "USDCHF=X",
+    "USDCAD" : "USDCAD=X",
+    "AUDUSD" : "AUDUSD=X",
+    "NZDUSD" : "NZDUSD=X",
+    "GBPJPY" : "GBPJPY=X",
+    "CADJPY" : "CADJPY=X",
+    "CHFJPY" : "CHFJPY=X",
+    "EURGBP" : "EURGBP=X",
+    "EURAUD" : "EURAUD=X",
+    "GBPAUD" : "GBPAUD=X",
+    "XAGUSD" : "SI=F",
+    "USOIL"  : "CL=F",
 }
 
 # ─────────────────────────────────────────────────────
