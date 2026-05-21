@@ -19,8 +19,8 @@ from datetime import datetime
 #  ⚙️  KONFIGURASI — dibaca dari Environment Variable Railway
 # ─────────────────────────────────────────────────────
 
-BOT_TOKEN  = os.environ.get("BOT_TOKEN", "")
-CHAT_ID    = os.environ.get("CHAT_ID", "")
+BOT_TOKEN  = os.environ.get("8874771733:AAEJPa9h1Zz1ZH6VgKomBSPNfwhz-uJsNvI", "")
+CHAT_ID    = os.environ.get("8874771733", "")
 
 N_CANDLES      = int(os.environ.get("N_CANDLES", "200"))
 EMA_FAST       = int(os.environ.get("EMA_FAST", "9"))
