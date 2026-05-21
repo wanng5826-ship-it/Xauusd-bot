@@ -1,5 +1,4 @@
-cat > /mnt/user-data/outputs/xauusd-bot/main.py << 'ENDOFFILE'
-"""
+
 =======================================================
   XAUUSD Counter-Trend Engulfing Bot  —  v4.0
   Deploy   : Railway (via GitHub)
