@@ -1,13 +1,4 @@
 
-=======================================================
-  XAUUSD Counter-Trend Engulfing Bot  —  v4.0
-  Deploy   : Railway (via GitHub)
-  Data     : Alpha Vantage (live XAUUSD 1 menit)
-  Timeframe: 1 Menit
-  Logika   : Engulfing BERLAWANAN trend + S/R 200 candle
-  Notif    : Telegram Bot
-=======================================================
-"""
 
 import os
 import time
