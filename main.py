@@ -102,18 +102,12 @@ PAIRS = {
 #  Overlap : 12:00 – 16:00 UTC (paling liquid)
 # ─────────────────────────────────────────────────────
 def is_valid_session():
-    """
-    Return True hanya jika waktu sekarang masuk sesi
-    London (07–16 UTC) atau New York (12–21 UTC).
-    Sesi Asia (21–07 UTC) di-skip karena banyak noise.
-    """
     now_utc = datetime.now(timezone.utc)
     hour = now_utc.hour
-    # London session: 07:00 – 16:00
-    in_london = 7 <= hour < 16
-    # New York session: 12:00 – 21:00
+    in_london  = 7 <= hour < 16
     in_newyork = 12 <= hour < 21
-    return in_london or in_newyork
+    in_asia    = 0 <= hour < 7
+    return in_london or in_newyork or in_asia
 
 # ─────────────────────────────────────────────────────
 #  📡  AMBIL DATA CANDLE
