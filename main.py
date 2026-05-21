@@ -1,14 +1,19 @@
-
+"""
+=======================================================
+  XAUUSD Counter-Trend Engulfing Bot  —  v4.0
+  Deploy   : Railway (via GitHub)
+  Data     : Alpha Vantage (live XAUUSD 1 menit)
+  Timeframe: 1 Menit
+  Logika   : Engulfing BERLAWANAN trend + S/R 200 candle
+  Notif    : Telegram Bot
+=======================================================
+"""
 
 import os
 import time
 import requests
 import pandas as pd
 from datetime import datetime
-
-# ─────────────────────────────────────────────────────
-#  ⚙️  KONFIGURASI
-# ─────────────────────────────────────────────────────
 
 BOT_TOKEN      = os.environ.get("BOT_TOKEN", "")
 CHAT_ID        = os.environ.get("CHAT_ID", "")
@@ -22,15 +27,7 @@ SR_ZONE        = float(os.environ.get("SR_ZONE", "0.80"))
 SR_NEAR_ZONE   = float(os.environ.get("SR_NEAR_ZONE", "2.50"))
 CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "60"))
 
-# ─────────────────────────────────────────────────────
-#  📡  AMBIL DATA DARI ALPHA VANTAGE
-# ─────────────────────────────────────────────────────
-
 def get_candles():
-    """
-    Ambil data XAUUSD 1 menit dari Alpha Vantage.
-    Simbol: XAU/USD (spot gold)
-    """
     print("[DATA] Mengambil data dari Alpha Vantage...")
     url = "https://www.alphavantage.co/query"
     params = {
@@ -41,26 +38,20 @@ def get_candles():
         "outputsize"  : "full",
         "apikey"      : AV_API_KEY,
     }
-
     try:
         r = requests.get(url, params=params, timeout=20)
         data = r.json()
-
-        # Cek error
         if "Error Message" in data:
             print(f"[AV ERROR] {data['Error Message']}")
             return None
-
         if "Note" in data:
             print("[AV] Rate limit tercapai, tunggu 1 menit...")
             time.sleep(60)
             return None
-
         key = "Time Series FX (1min)"
         if key not in data:
             print(f"[AV ERROR] Key tidak ditemukan: {list(data.keys())}")
             return None
-
         ts = data[key]
         rows = []
         for dt_str, val in ts.items():
@@ -72,28 +63,17 @@ def get_candles():
                 "close" : float(val["4. close"]),
                 "volume": 0,
             })
-
         df = pd.DataFrame(rows)
         df = df.sort_values("time").reset_index(drop=True)
         df = df.tail(N_CANDLES).reset_index(drop=True)
-
         print(f"[DATA] {len(df)} candle dari Alpha Vantage (XAUUSD 1 menit)")
         return df
-
     except Exception as e:
         print(f"[AV ERROR] {e}")
         return None
 
-# ─────────────────────────────────────────────────────
-#  📊  EMA
-# ─────────────────────────────────────────────────────
-
 def hitung_ema(series, period):
     return series.ewm(span=period, adjust=False).mean()
-
-# ─────────────────────────────────────────────────────
-#  📈  TREND
-# ─────────────────────────────────────────────────────
 
 def get_trend(df):
     df = df.copy()
@@ -101,7 +81,6 @@ def get_trend(df):
     df["es"] = hitung_ema(df["close"], EMA_SLOW)
     ef = round(df["ef"].iloc[-1], 2)
     es = round(df["es"].iloc[-1], 2)
-
     if ef > es:
         return {"trend": "UPTREND",   "dir": "UP",   "emoji": "📈", "ema_fast": ef, "ema_slow": es}
     elif ef < es:
@@ -109,22 +88,15 @@ def get_trend(df):
     else:
         return {"trend": "SIDEWAYS",  "dir": "NONE", "emoji": "↔️", "ema_fast": ef, "ema_slow": es}
 
-# ─────────────────────────────────────────────────────
-#  🕯️  ENGULFING COUNTER-TREND
-# ─────────────────────────────────────────────────────
-
 def detect_engulfing(df, trend_dir):
     if len(df) < 3:
         return None, None
-
     prev = df.iloc[-2]
     curr = df.iloc[-1]
     pb   = abs(prev["close"] - prev["open"])
     cb   = abs(curr["close"] - curr["open"])
-
     if pb < 0.10 or cb < 0.10:
         return None, None
-
     bullish = (
         prev["close"] < prev["open"] and
         curr["close"] > curr["open"] and
@@ -139,16 +111,11 @@ def detect_engulfing(df, trend_dir):
         curr["close"] <= prev["open"]  + 0.15 and
         cb >= pb * 0.75
     )
-
     if bullish and trend_dir == "DOWN":
         return "BULLISH", "BUY"
     if bearish and trend_dir == "UP":
         return "BEARISH", "SELL"
     return None, None
-
-# ─────────────────────────────────────────────────────
-#  🏔️  SUPPORT & RESISTANCE
-# ─────────────────────────────────────────────────────
 
 def find_sr(df):
     highs  = df["high"].values.tolist()
@@ -156,7 +123,6 @@ def find_sr(df):
     closes = df["close"].values.tolist()
     n      = len(df)
     win    = 3
-
     ph, pl = [], []
     for i in range(win, n - win):
         if all(highs[i] >= highs[i-j] for j in range(1, win+1)) and \
@@ -194,16 +160,11 @@ def find_sr(df):
     for x in sup: x["type"] = "SUPPORT"
     return sup, res
 
-
 def near_sr(price, sup, res):
     for lvl in (sup + res):
         if abs(price - lvl["level"]) <= SR_NEAR_ZONE:
             return True, lvl["level"], lvl["type"], lvl["strength"]
     return False, None, None, None
-
-# ─────────────────────────────────────────────────────
-#  ✅  CEK SINYAL
-# ─────────────────────────────────────────────────────
 
 def check_signal(df):
     trend          = get_trend(df)
@@ -211,7 +172,6 @@ def check_signal(df):
     sup, res       = find_sr(df)
     price          = round(df["close"].iloc[-1], 2)
     is_near, sr_lv, sr_tp, sr_st = near_sr(price, sup, res)
-
     valid = (engulf is not None) and is_near
     return {
         "signal"     : action if valid else None,
@@ -225,10 +185,6 @@ def check_signal(df):
         "supports"   : sup[:4],
         "resistances": res[:4],
     }
-
-# ─────────────────────────────────────────────────────
-#  📬  TELEGRAM
-# ─────────────────────────────────────────────────────
 
 def send_telegram(message):
     try:
@@ -244,7 +200,6 @@ def send_telegram(message):
     except Exception as e:
         print(f"[TELEGRAM] ❌ {e}")
 
-
 def format_sr(sup, res):
     lines = ["🔴 <b>Resistance:</b>"]
     for r in (res[:3] if res else []):
@@ -257,10 +212,6 @@ def format_sr(sup, res):
     if not sup:
         lines.append("   • Tidak terdeteksi")
     return "\n".join(lines)
-
-# ─────────────────────────────────────────────────────
-#  🚀  MAIN
-# ─────────────────────────────────────────────────────
 
 def main():
     print("=" * 55)
@@ -292,7 +243,6 @@ def main():
         try:
             print(f"\n[{now_str}] Cek sinyal...")
             df = get_candles()
-
             if df is None or len(df) < 50:
                 print("[WARN] Data kurang, coba lagi...")
                 time.sleep(CHECK_INTERVAL)
@@ -313,7 +263,6 @@ def main():
                     last_candle_id = candle_ts
                     action = result["signal"]
                     emj    = "🟢" if action == "BUY" else "🔴"
-
                     logic = (
                         f"   📉 Trend DOWNTREND\n"
                         f"   🕯️ Bullish Engulfing muncul\n"
@@ -325,7 +274,6 @@ def main():
                         f"   🏔️ Dekat RESISTANCE ${result['sr_level']}\n"
                         f"   → Potensi REVERSAL TURUN"
                     )
-
                     send_telegram(
                         f"{emj} <b>SINYAL {action} — XAUUSD</b>\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -355,8 +303,5 @@ def main():
 
         time.sleep(CHECK_INTERVAL)
 
-
 if __name__ == "__main__":
     main()
-ENDOFFILE
-echo "Done: $?"
