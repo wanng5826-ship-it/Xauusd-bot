@@ -17,7 +17,7 @@ from datetime import datetime
 
 BOT_TOKEN      = os.environ.get("BOT_TOKEN", "")
 CHAT_ID        = os.environ.get("CHAT_ID", "")
-AV_API_KEY     = os.environ.get("AV_API_KEY", "IMZQ2A4YPAD5VSTN")
+AV_API_KEY     = os.environ.get("AV_API_KEY", "")
 
 N_CANDLES      = int(os.environ.get("N_CANDLES", "200"))
 EMA_FAST       = int(os.environ.get("EMA_FAST", "9"))
