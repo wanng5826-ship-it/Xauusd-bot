@@ -214,7 +214,7 @@ def main():
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 Pair      : XAUUSD\n"
         f"⏱️ Timeframe : 1 Menit\n"
-        f"📈 Data      : Alpha Vantage ({N_CANDLES} candle)\n"
+        f"📈 Data      : Yahoo Finance ({N_CANDLES} candle)\n"
         f"🔍 Strategi  : Engulfing counter-trend + S/R\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"✅ Bot berjalan 24 jam di Railway!"
