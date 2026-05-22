@@ -1,19 +1,16 @@
 """
 =======================================================
-  SMC Multi-Pair Bot  —  v12.0
+  SMC Multi-Pair Bot  —  v12.2
   Pairs    : 18 pair forex + komoditas
   Strategy : Smart Money Concept (SMC)
   AI       : Groq Llama3 (analisis makro ekonomi)
   Data     : yfinance + FRED API + NewsAPI
   Notif    : Telegram
 
-  CHANGELOG v12.0:
-  [FIX v12-1] detect_bos: window [-8:-3] agar tidak overlap sweep
-  [FIX v12-2] confirm_entry: min_body pakai ATR bukan persentase harga
-  [FIX v12-3] detect_fvg: wajib minimal 1 candle setelah FVG
-  [FIX v12-4] calc_sl_tp: SL max ATR*3 dari entry
-  [FIX v12-5] analyze_pair: hanya filter 4H sideways, 1H bebas
-  [FIX v12-6] optimal_entry: BUY di fvg_low, SELL di fvg_high
+  CHANGELOG v12.2:
+  [FIX v12-8] analyze_pair: filter posisi harga vs FVG dihapus,
+              diganti info status posisi harga terhadap FVG
+              agar sinyal tetap sering tapi trader bisa filter manual
 =======================================================
 """
 
@@ -134,7 +131,6 @@ def detect_liquidity_sweep(df, structure):
     return False, None
 
 def detect_bos(df, structure):
-    # [FIX v12-1] Window [-8:-3] tidak overlap dengan sweep [-5:-2]
     if len(df) < 9:
         return False, None
     if structure == "UPTREND":
@@ -165,7 +161,6 @@ def detect_fvg(df, structure, pair=""):
             if gap_high > gap_low:
                 fvg_found += 1
                 candles_after = df.iloc[i + 3:]
-                # [FIX v12-3] Wajib minimal 1 candle setelah FVG
                 if len(candles_after) >= 1 and candles_after["low"].min() > gap_low:
                     fvg_valid += 1
                     print(f"[{pair}] FVG Bullish: {round(gap_low,4)}–{round(gap_high,4)}")
@@ -176,7 +171,6 @@ def detect_fvg(df, structure, pair=""):
             if fvg_bot < fvg_top:
                 fvg_found += 1
                 candles_after = df.iloc[i + 3:]
-                # [FIX v12-3] Wajib minimal 1 candle setelah FVG
                 if len(candles_after) >= 1 and candles_after["high"].max() < fvg_top:
                     fvg_valid += 1
                     print(f"[{pair}] FVG Bearish: {round(fvg_bot,4)}–{round(fvg_top,4)}")
@@ -191,7 +185,6 @@ def confirm_entry(df, structure):
     curr = df.iloc[-2]
     pb = abs(prev["close"] - prev["open"])
     cb = abs(curr["close"] - curr["open"])
-    # [FIX v12-2] Min body pakai ATR agar konsisten semua pair
     atr = (df["high"] - df["low"]).tail(14).mean()
     min_body = atr * 0.1
     if pb < min_body:
@@ -217,7 +210,6 @@ def calc_sl_tp(df, structure, sweep_level):
         risk      = price - sl
         if risk <= 0:
             return None, round(price, 4), round(price, 4), round(price, 4)
-        # [FIX v12-4] SL tidak boleh lebih jauh dari ATR*3
         if risk > atr * 3:
             print(f"[CALC] SL terlalu jauh, skip")
             return None, round(price, 4), round(price, 4), round(price, 4)
@@ -229,7 +221,6 @@ def calc_sl_tp(df, structure, sweep_level):
         risk      = sl - price
         if risk <= 0:
             return None, round(price, 4), round(price, 4), round(price, 4)
-        # [FIX v12-4] SL tidak boleh lebih jauh dari ATR*3
         if risk > atr * 3:
             print(f"[CALC] SL terlalu jauh, skip")
             return None, round(price, 4), round(price, 4), round(price, 4)
@@ -423,7 +414,6 @@ def analyze_pair(pair, symbol):
 
     print(f"[{pair}] Struktur 4H: {structure_4h} | 1H: {structure_1h}")
 
-    # Hanya filter 4H sideways, 1H bebas (pullback diizinkan)
     if structure_4h == "SIDEWAYS":
         print(f"[{pair}] 4H SIDEWAYS → NO TRADE")
         return None
@@ -445,6 +435,27 @@ def analyze_pair(pair, symbol):
         print(f"[{pair}] Tidak ada FVG valid")
         return None
 
+    # [FIX v12-8] Info posisi harga vs FVG tanpa filter/skip
+    current_price = df_15m["close"].iloc[-2]
+    if structure == "UPTREND":
+        if fvg_low <= current_price <= fvg_high:
+            fvg_status = "✅ Harga di dalam FVG — entry sekarang"
+        elif current_price < fvg_low:
+            jarak = round(fvg_low - current_price, 4)
+            fvg_status = f"⏳ Harga {jarak} di bawah FVG — tunggu naik"
+        else:
+            jarak = round(current_price - fvg_high, 4)
+            fvg_status = f"⚠️ Harga {jarak} di atas FVG — sudah lewat"
+    else:
+        if fvg_low <= current_price <= fvg_high:
+            fvg_status = "✅ Harga di dalam FVG — entry sekarang"
+        elif current_price > fvg_high:
+            jarak = round(current_price - fvg_high, 4)
+            fvg_status = f"⏳ Harga {jarak} di atas FVG — tunggu turun"
+        else:
+            jarak = round(fvg_low - current_price, 4)
+            fvg_status = f"⚠️ Harga {jarak} di bawah FVG — sudah lewat"
+
     confirmed = confirm_entry(df_15m, structure)
     if not confirmed:
         print(f"[{pair}] Entry belum terkonfirmasi di 15M")
@@ -455,11 +466,7 @@ def analyze_pair(pair, symbol):
         print(f"[{pair}] Risk kalkulasi invalid, skip")
         return None
 
-    # [FIX v12-6] Entry optimal di zona FVG
-    # BUY  → entry di fvg_low  (zona diskon, harga paling murah)
-    # SELL → entry di fvg_high (zona premium, harga paling mahal)
     optimal_entry = fvg_low if structure == "UPTREND" else fvg_high
-
     rr = round(abs(tp - entry) / abs(entry - sl), 2) if abs(entry - sl) > 0 else 0
 
     print(f"[{pair}] ✅ SINYAL {action} | Entry:{entry} Optimal:{optimal_entry} SL:{sl} TP:{tp} RR:1:{rr}")
@@ -477,11 +484,12 @@ def analyze_pair(pair, symbol):
         "bos"           : bos_level,
         "fvg_low"       : fvg_low,
         "fvg_high"      : fvg_high,
+        "fvg_status"    : fvg_status,
     }
 
 def main():
     print("=" * 55)
-    print("  SMC Multi-Pair Bot  v12.0  [Railway]")
+    print("  SMC Multi-Pair Bot  v12.2  [Railway]")
     print(f"  Pairs   : {len(PAIRS)} pairs aktif")
     print(f"  Interval: {CHECK_INTERVAL}s")
     print(f"  Max sinyal/cycle: {MAX_SIGNALS_PER_CYCLE}")
@@ -492,7 +500,7 @@ def main():
         return
 
     send_telegram(
-        "🤖 <b>SMC Multi-Pair Bot v12 — ONLINE!</b>\n"
+        "🤖 <b>SMC Multi-Pair Bot v12.2 — ONLINE!</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 Pairs       : {len(PAIRS)} pair aktif\n"
         "📈 Strategy    : Smart Money Concept\n"
@@ -576,6 +584,7 @@ def main():
                     f"💧 Liquidity Sweep : {result['sweep']}\n"
                     f"🔀 BOS Level       : {result['bos']}\n"
                     f"📦 FVG Zone        : {result['fvg_low']} – {result['fvg_high']}\n"
+                    f"📍 Posisi Harga    : {result['fvg_status']}\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"📊 <b>Data Ekonomi Makro:</b>\n{fred_text}\n"
                     f"━━━━━━━━━━━━━━━━━━━━━━━\n"
