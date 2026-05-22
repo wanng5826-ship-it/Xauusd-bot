@@ -117,29 +117,32 @@ def detect_structure(df):
     return "SIDEWAYS"
 
 def detect_liquidity_sweep(df, structure):
-    if len(df) < 6:
+    if len(df) < 10:
         return False, None
-    prev_high = df["high"].iloc[-5:-2].max()
-    prev_low  = df["low"].iloc[-5:-2].min()
-    curr = df.iloc[-2]
-    if structure == "DOWNTREND":
-        if curr["high"] >= prev_high and curr["close"] < prev_high:
-            return True, prev_high
-    elif structure == "UPTREND":
-        if curr["low"] <= prev_low and curr["close"] > prev_low:
-            return True, prev_low
+    ref_high   = df["high"].iloc[-10:-5].max()
+    ref_low    = df["low"].iloc[-10:-5].min()
+    sweep_zone = df.iloc[-6:-2]  # candle lama, bukan terbaru
+    for i in range(len(sweep_zone) - 1, -1, -1):
+        c = sweep_zone.iloc[i]
+        if structure == "UPTREND":
+            if c["low"] <= ref_low and c["close"] > ref_low:
+                return True, ref_low
+        elif structure == "DOWNTREND":
+            if c["high"] >= ref_high and c["close"] < ref_high:
+                return True, ref_high
     return False, None
 
 def detect_bos(df, structure):
     if len(df) < 9:
         return False, None
+    prev_high = df["high"].iloc[-8:-3].max()
+    prev_low  = df["low"].iloc[-8:-3].min()
     if structure == "UPTREND":
-        prev_high = df["high"].iloc[-8:-3].max()
-        if df["high"].iloc[-2] > prev_high:
+        # cek 2 candle terbaru setelah sweep
+        if df["high"].iloc[-2] > prev_high or df["high"].iloc[-3] > prev_high:
             return True, round(prev_high, 4)
     elif structure == "DOWNTREND":
-        prev_low = df["low"].iloc[-8:-3].min()
-        if df["low"].iloc[-2] < prev_low:
+        if df["low"].iloc[-2] < prev_low or df["low"].iloc[-3] < prev_low:
             return True, round(prev_low, 4)
     return False, None
 
