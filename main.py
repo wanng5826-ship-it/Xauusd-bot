@@ -187,18 +187,23 @@ def confirm_entry(df, structure):
     prev = df.iloc[-3]
     curr = df.iloc[-2]
     cb  = abs(curr["close"] - curr["open"])
-atr = (df["high"] - df["low"]).tail(14).mean()
-if atr == 0:
+    atr = (df["high"] - df["low"]).tail(14).mean()
+    if atr == 0:
+        return False
+    # Body candle minimal 8% ATR (lebih wajar dari sebelumnya)
+    if cb < atr * 0.08:
+        return False
+    if structure == "UPTREND":
+        return (
+            curr["close"] > curr["open"] and   # candle M15 harus bullish
+            curr["close"] > prev["close"]       # close lebih tinggi dari candle sebelumnya
+        )
+    elif structure == "DOWNTREND":
+        return (
+            curr["close"] < curr["open"] and   # candle M15 harus bearish
+            curr["close"] < prev["close"]       # close lebih rendah dari candle sebelumnya
+        )
     return False
-if cb < atr * 0.08:
-    return False
-if structure == "UPTREND":
-    return (curr["close"] > curr["open"] and
-            curr["close"] > prev["close"])
-elif structure == "DOWNTREND":
-    return (curr["close"] < curr["open"] and
-            curr["close"] < prev["close"])
-return False
 
 def calc_sl_tp(df, structure, sweep_level):
     price       = df["close"].iloc[-2]
