@@ -547,7 +547,7 @@ def main():
                 if result is None:
                     continue
 
-                sig_key      = f"{pair}_{result['action']}_{result['entry']}"
+                sig_key      = f"{pair}_{result['action']}_{result['fvg_low']}_{result['fvg_high']}"
                 now_ts       = time.time()
                 last_key     = sent_signals.get(pair)
                 last_time    = sent_signals_time.get(pair, 0)
