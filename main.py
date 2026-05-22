@@ -186,21 +186,19 @@ def confirm_entry(df, structure):
         return False
     prev = df.iloc[-3]
     curr = df.iloc[-2]
-    pb = abs(prev["close"] - prev["open"])
-    cb = abs(curr["close"] - curr["open"])
-    atr = (df["high"] - df["low"]).tail(14).mean()
-    min_body = atr * 0.1
-    if pb < min_body:
-        return False
-    if structure == "UPTREND":
-        return (curr["close"] > curr["open"] and
-                cb >= pb * 0.7 and
-                curr["close"] > prev["high"])
-    elif structure == "DOWNTREND":
-        return (curr["close"] < curr["open"] and
-                cb >= pb * 0.7 and
-                curr["close"] < prev["low"])
+    cb  = abs(curr["close"] - curr["open"])
+atr = (df["high"] - df["low"]).tail(14).mean()
+if atr == 0:
     return False
+if cb < atr * 0.08:
+    return False
+if structure == "UPTREND":
+    return (curr["close"] > curr["open"] and
+            curr["close"] > prev["close"])
+elif structure == "DOWNTREND":
+    return (curr["close"] < curr["open"] and
+            curr["close"] < prev["close"])
+return False
 
 def calc_sl_tp(df, structure, sweep_level):
     price       = df["close"].iloc[-2]
