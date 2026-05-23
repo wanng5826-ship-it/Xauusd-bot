@@ -49,7 +49,11 @@ PAIRS = {
     "GBPAUD" : "GBPAUD=X",
     "XAGUSD" : "SI=F",
     "USOIL"  : "CL=F",
+    "BTCUSD" : "BTC-USD",
 }
+
+# Pair yang pakai strategi EMA+RSI scalping (bukan SMC)
+SCALPING_PAIRS = {"BTCUSD"}
 
 def is_valid_session():
     now_utc = datetime.now(timezone.utc)
@@ -404,6 +408,93 @@ def send_telegram(message):
     except Exception as e:
         print(f"[TELEGRAM] ❌ {e}")
 
+
+def analyze_btc_scalping(pair, symbol):
+    """Strategi scalping EMA9/EMA21 + RSI untuk BTCUSD — target 1H"""
+    print(f"\n[{pair}] Menganalisis (Scalping EMA+RSI)...")
+
+    df_4h = get_data(symbol, "4h", "30d")
+    df_1h = get_data(symbol, "1h", "7d")
+
+    if df_4h is None or df_1h is None:
+        print(f"[{pair}] Data tidak tersedia")
+        return None
+
+    structure_4h = detect_structure(df_4h)
+    print(f"[{pair}] Struktur 4H: {structure_4h}")
+    if structure_4h == "SIDEWAYS":
+        print(f"[{pair}] 4H SIDEWAYS — NO TRADE")
+        return None
+
+    df = df_1h.copy()
+    df["ema9"]  = df["close"].ewm(span=9,  adjust=False).mean()
+    df["ema21"] = df["close"].ewm(span=21, adjust=False).mean()
+
+    delta  = df["close"].diff()
+    gain   = delta.clip(lower=0).rolling(14).mean()
+    loss   = (-delta.clip(upper=0)).rolling(14).mean()
+    rs     = gain / loss.replace(0, 1e-9)
+    df["rsi"] = 100 - (100 / (1 + rs))
+
+    if len(df) < 25:
+        print(f"[{pair}] Data 1H kurang")
+        return None
+
+    prev = df.iloc[-3]
+    curr = df.iloc[-2]
+
+    ema9_curr  = curr["ema9"]
+    ema21_curr = curr["ema21"]
+    ema9_prev  = prev["ema9"]
+    ema21_prev = prev["ema21"]
+    rsi        = curr["rsi"]
+    price      = curr["close"]
+
+    cross_up   = (ema9_prev <= ema21_prev) and (ema9_curr > ema21_curr)
+    cross_down = (ema9_prev >= ema21_prev) and (ema9_curr < ema21_curr)
+
+    if cross_up and structure_4h == "UPTREND" and 40 <= rsi <= 70:
+        action = "BUY"
+    elif cross_down and structure_4h == "DOWNTREND" and 30 <= rsi <= 60:
+        action = "SELL"
+    else:
+        print(f"[{pair}] Tidak ada crossover valid | EMA9:{round(ema9_curr,1)} EMA21:{round(ema21_curr,1)} RSI:{round(rsi,1)}")
+        return None
+
+    atr    = (df["high"] - df["low"]).tail(14).mean()
+    buffer = atr * 0.2
+
+    if action == "BUY":
+        sl   = round(curr["low"] - buffer, 2)
+        risk = price - sl
+        if risk <= 0 or risk > atr * 4:
+            print(f"[{pair}] Risk invalid, skip")
+            return None
+        tp = round(price + risk * 1.5, 2)
+    else:
+        sl   = round(curr["high"] + buffer, 2)
+        risk = sl - price
+        if risk <= 0 or risk > atr * 4:
+            print(f"[{pair}] Risk invalid, skip")
+            return None
+        tp = round(price - risk * 1.5, 2)
+
+    print(f"[{pair}] SINYAL {action} | Entry:{round(price,2)} SL:{sl} TP:{tp} RSI:{round(rsi,1)}")
+
+    return {
+        "pair"     : pair,
+        "action"   : action,
+        "entry"    : round(price, 2),
+        "sl"       : sl,
+        "tp"       : tp,
+        "rr"       : 1.5,
+        "structure": structure_4h,
+        "rsi"      : round(rsi, 1),
+        "ema9"     : round(ema9_curr, 2),
+        "ema21"    : round(ema21_curr, 2),
+        "scalping" : True,
+    }
+
 def analyze_pair(pair, symbol):
     print(f"\n[{pair}] Menganalisis...")
 
@@ -549,11 +640,17 @@ def main():
                 break
 
             try:
-                result = analyze_pair(pair, symbol)
+                if pair in SCALPING_PAIRS:
+                    result = analyze_btc_scalping(pair, symbol)
+                else:
+                    result = analyze_pair(pair, symbol)
                 if result is None:
                     continue
 
-                sig_key      = f"{pair}_{result['action']}_{result['fvg_low']}_{result['fvg_high']}"
+                if result.get('scalping'):
+                    sig_key = f"{pair}_{result['action']}_{result['entry']}"
+                else:
+                    sig_key = f"{pair}_{result['action']}_{result['fvg_low']}_{result['fvg_high']}"
                 now_ts       = time.time()
                 last_key     = sent_signals.get(pair)
                 last_time    = sent_signals_time.get(pair, 0)
@@ -575,32 +672,53 @@ def main():
                 news_text = "\n".join([f"   • {h[:55]}..." for h in headlines]) if headlines else "   • Tidak tersedia"
                 fred_text = format_fred_data(fred_data) if fred_data else "   • Tidak tersedia"
 
-                msg = (
-                    f"{emj} <b>SINYAL {result['action']} — {pair}</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"⏱️ Waktu          : {now_str}\n"
-                    f"💰 Entry Market   : {result['entry']}\n"
-                    f"🎯 Entry Optimal  : {result['optimal_entry']}  ← harga terbaik\n"
-                    f"🛑 Stop Loss      : {result['sl']}\n"
-                    f"🎯 Take Profit    : {result['tp']}\n"
-                    f"⚖️ R:R Ratio      : 1:{result['rr']}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"{trend_emj} <b>Struktur 4H :</b> {result['structure']}\n"
-                    f"📊 <b>Struktur 1H :</b> {result['structure_1h']}\n"
-                    f"💧 Liquidity Sweep : {result['sweep']}\n"
-                    f"🔀 BOS Level       : {result['bos']}\n"
-                    f"📦 FVG Zone        : {result['fvg_low']} – {result['fvg_high']}\n"
-                    f"📍 Posisi Harga    : {result['fvg_status']}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📊 <b>Data Ekonomi Makro:</b>\n{fred_text}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📰 <b>Berita Terkini:</b>\n{news_text}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"🧠 <b>Analisis AI Makro:</b>\n{ai_analysis}\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"✅ <b>SEMUA SYARAT TERPENUHI!</b>\n"
-                    f"⚠️ Risiko maks 1-2% per trade!"
-                )
+                if result.get("scalping"):
+                    msg = (
+                        f"{emj} <b>SCALPING {result['action']} — {pair}</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"⏱️ Waktu     : {now_str}\n"
+                        f"💰 Entry     : {result['entry']}\n"
+                        f"🛑 Stop Loss : {result['sl']}\n"
+                        f"🎯 Take Profit: {result['tp']}\n"
+                        f"⚖️ R:R Ratio : 1:{result['rr']}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"{trend_emj} <b>Trend 4H  :</b> {result['structure']}\n"
+                        f"📊 EMA9      : {result['ema9']}\n"
+                        f"📊 EMA21     : {result['ema21']}\n"
+                        f"📈 RSI 14    : {result['rsi']}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"📰 <b>Berita Terkini:</b>\n{news_text}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"✅ EMA Crossover + RSI Confirmed!\n"
+                        f"⚠️ Risiko maks 1-2% per trade!"
+                    )
+                else:
+                    msg = (
+                        f"{emj} <b>SINYAL {result['action']} — {pair}</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"⏱️ Waktu          : {now_str}\n"
+                        f"💰 Entry Market   : {result['entry']}\n"
+                        f"🎯 Entry Optimal  : {result['optimal_entry']}  ← harga terbaik\n"
+                        f"🛑 Stop Loss      : {result['sl']}\n"
+                        f"🎯 Take Profit    : {result['tp']}\n"
+                        f"⚖️ R:R Ratio      : 1:{result['rr']}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"{trend_emj} <b>Struktur 4H :</b> {result['structure']}\n"
+                        f"📊 <b>Struktur 1H :</b> {result['structure_1h']}\n"
+                        f"💧 Liquidity Sweep : {result['sweep']}\n"
+                        f"🔀 BOS Level       : {result['bos']}\n"
+                        f"📦 FVG Zone        : {result['fvg_low']} – {result['fvg_high']}\n"
+                        f"📍 Posisi Harga    : {result['fvg_status']}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"📊 <b>Data Ekonomi Makro:</b>\n{fred_text}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"📰 <b>Berita Terkini:</b>\n{news_text}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"🧠 <b>Analisis AI Makro:</b>\n{ai_analysis}\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"✅ <b>SEMUA SYARAT TERPENUHI!</b>\n"
+                        f"⚠️ Risiko maks 1-2% per trade!"
+                    )
                 send_telegram(msg)
                 signals_this_cycle += 1
 
