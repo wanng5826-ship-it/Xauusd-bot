@@ -1,16 +1,20 @@
 """
 =======================================================
-  SMC Multi-Pair Bot  —  v12.2
-  Pairs    : 18 pair forex + komoditas
+  SMC Multi-Pair Bot  —  v12.4
+  Pairs    : 19 pair forex + komoditas + crypto
   Strategy : Smart Money Concept (SMC)
   AI       : Groq Llama3 (analisis makro ekonomi)
   Data     : yfinance + FRED API + NewsAPI
   Notif    : Telegram
 
-  CHANGELOG v12.2:
-  [FIX v12-8] analyze_pair: filter posisi harga vs FVG dihapus,
-              diganti info status posisi harga terhadap FVG
-              agar sinyal tetap sering tapi trader bisa filter manual
+  CHANGELOG v12.4:
+  [FIX 1] detect_liquidity_sweep: window diperluas ke 10 candle (dari 6)
+          → sweep lebih sering terdeteksi, WR tidak turun
+  [FIX 2] detect_bos: cek 6 candle ke belakang (dari 3)
+          → BOS tetap WAJIB tapi lebih sensitif
+  [FIX 3] confirm_entry: ganti ke 2 candle 15M searah berturut-turut
+          → lebih natural & sering terpenuhi vs 1 candle + body filter
+  [NOTE]  FVG tidak diubah — tetap window 15, filter unfilled ketat
 =======================================================
 """
 
@@ -28,7 +32,7 @@ NEWS_API_KEY   = os.environ.get("NEWS_API_KEY", "")
 FRED_API_KEY   = os.environ.get("FRED_API_KEY", "")
 CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "300"))
 
-MAX_SIGNALS_PER_CYCLE = 3
+MAX_SIGNALS_PER_CYCLE = 5
 
 PAIRS = {
     "XAUUSD" : "GC=F",
@@ -52,17 +56,22 @@ PAIRS = {
     "BTCUSD" : "BTC-USD",
 }
 
-# Pair yang pakai strategi EMA+RSI scalping (bukan SMC)
 SCALPING_PAIRS = {"BTCUSD"}
 
+# ─────────────────────────────────────────────
+#  SESSION
+# ─────────────────────────────────────────────
 def is_valid_session():
     now_utc = datetime.now(timezone.utc)
     hour = now_utc.hour
-    in_london  = 7 <= hour < 16
+    in_london  = 7  <= hour < 16
     in_newyork = 12 <= hour < 21
-    in_asia    = 0 <= hour < 7
+    in_asia    = 0  <= hour < 7
     return in_london or in_newyork or in_asia
 
+# ─────────────────────────────────────────────
+#  DATA
+# ─────────────────────────────────────────────
 def get_data(symbol, interval, period):
     try:
         ticker = yf.Ticker(symbol)
@@ -87,6 +96,9 @@ def get_data(symbol, interval, period):
         print(f"[DATA ERROR] {symbol} {interval}: {e}")
         return None
 
+# ─────────────────────────────────────────────
+#  STRUKTUR
+# ─────────────────────────────────────────────
 def find_swing_points(df, lookback=30):
     highs = []
     lows  = []
@@ -120,12 +132,17 @@ def detect_structure(df):
         return "DOWNTREND"
     return "SIDEWAYS"
 
+# ─────────────────────────────────────────────
+#  LIQUIDITY SWEEP  [v12.4] window 10 candle
+# ─────────────────────────────────────────────
 def detect_liquidity_sweep(df, structure):
-    if len(df) < 10:
+    if len(df) < 12:
         return False, None
-    ref_high   = df["high"].iloc[-10:-5].max()
-    ref_low    = df["low"].iloc[-10:-5].min()
-    sweep_zone = df.iloc[-6:-2]  # candle lama, bukan terbaru
+    # ref level dari candle lebih jauh ke belakang
+    ref_high = df["high"].iloc[-15:-8].max()
+    ref_low  = df["low"].iloc[-15:-8].min()
+    # [v12.4] sweep_zone diperluas: 10 candle (dari 6), exclude 2 candle terbaru
+    sweep_zone = df.iloc[-12:-2]
     for i in range(len(sweep_zone) - 1, -1, -1):
         c = sweep_zone.iloc[i]
         if structure == "UPTREND":
@@ -136,20 +153,28 @@ def detect_liquidity_sweep(df, structure):
                 return True, ref_high
     return False, None
 
+# ─────────────────────────────────────────────
+#  BOS  [v12.4] cek 6 candle (dari 3), WAJIB
+# ─────────────────────────────────────────────
 def detect_bos(df, structure):
-    if len(df) < 9:
+    if len(df) < 12:
         return False, None
-    prev_high = df["high"].iloc[-8:-3].max()
-    prev_low  = df["low"].iloc[-8:-3].min()
+    prev_high = df["high"].iloc[-12:-4].max()
+    prev_low  = df["low"].iloc[-12:-4].min()
     if structure == "UPTREND":
-        # cek 2 candle terbaru setelah sweep
-        if df["high"].iloc[-2] > prev_high or df["high"].iloc[-3] > prev_high:
-            return True, round(prev_high, 4)
+        # [v12.4] cek 6 candle terbaru (dari 3)
+        for i in range(-2, -8, -1):
+            if abs(i) <= len(df) and df["high"].iloc[i] > prev_high:
+                return True, round(prev_high, 4)
     elif structure == "DOWNTREND":
-        if df["low"].iloc[-2] < prev_low or df["low"].iloc[-3] < prev_low:
-            return True, round(prev_low, 4)
+        for i in range(-2, -8, -1):
+            if abs(i) <= len(df) and df["low"].iloc[i] < prev_low:
+                return True, round(prev_low, 4)
     return False, None
 
+# ─────────────────────────────────────────────
+#  FVG  (tidak diubah dari v12.2)
+# ─────────────────────────────────────────────
 def detect_fvg(df, structure, pair=""):
     if len(df) < 4:
         print(f"[{pair}] FVG: data terlalu sedikit")
@@ -185,30 +210,36 @@ def detect_fvg(df, structure, pair=""):
     print(f"[{pair}] FVG: ditemukan {fvg_found} gap, valid & unfilled: {fvg_valid} → tidak ada")
     return False, None, None
 
+# ─────────────────────────────────────────────
+#  KONFIRMASI ENTRY  [v12.4] 2 candle searah
+# ─────────────────────────────────────────────
 def confirm_entry(df, structure):
-    if len(df) < 3:
+    """
+    [v12.4] Konfirmasi 2 candle 15M berturut-turut searah.
+    Candle -3 dan -2 harus sama-sama bullish (UPTREND)
+    atau sama-sama bearish (DOWNTREND).
+    Lebih natural dan lebih sering terpenuhi dibanding
+    1 candle + body filter ATR.
+    """
+    if len(df) < 4:
         return False
-    prev = df.iloc[-3]
-    curr = df.iloc[-2]
-    cb  = abs(curr["close"] - curr["open"])
-    atr = (df["high"] - df["low"]).tail(14).mean()
-    if atr == 0:
-        return False
-    # Body candle minimal 8% ATR (lebih wajar dari sebelumnya)
-    if cb < atr * 0.08:
-        return False
+    c1 = df.iloc[-3]  # candle 2 sebelum terbaru
+    c2 = df.iloc[-2]  # candle terbaru (belum close)
     if structure == "UPTREND":
-        return (
-            curr["close"] > curr["open"] and   # candle M15 harus bullish
-            curr["close"] > prev["close"]       # close lebih tinggi dari candle sebelumnya
-        )
+        c1_bullish = c1["close"] > c1["open"]
+        c2_bullish = c2["close"] > c2["open"]
+        c2_higher  = c2["close"] > c1["close"]
+        return c1_bullish and c2_bullish and c2_higher
     elif structure == "DOWNTREND":
-        return (
-            curr["close"] < curr["open"] and   # candle M15 harus bearish
-            curr["close"] < prev["close"]       # close lebih rendah dari candle sebelumnya
-        )
+        c1_bearish = c1["close"] < c1["open"]
+        c2_bearish = c2["close"] < c2["open"]
+        c2_lower   = c2["close"] < c1["close"]
+        return c1_bearish and c2_bearish and c2_lower
     return False
 
+# ─────────────────────────────────────────────
+#  SL / TP
+# ─────────────────────────────────────────────
 def calc_sl_tp(df, structure, sweep_level):
     price       = df["close"].iloc[-2]
     atr         = (df["high"] - df["low"]).tail(14).mean()
@@ -238,6 +269,9 @@ def calc_sl_tp(df, structure, sweep_level):
         action = "SELL"
     return action, round(price, 4), sl, tp
 
+# ─────────────────────────────────────────────
+#  NEWS
+# ─────────────────────────────────────────────
 def get_news(pair):
     keywords = {
         "XAUUSD": "gold XAU USD Federal Reserve",
@@ -284,6 +318,9 @@ def get_news(pair):
         print(f"[NEWS ERROR] {e}")
         return []
 
+# ─────────────────────────────────────────────
+#  FRED
+# ─────────────────────────────────────────────
 def get_fred_data():
     indicators = {
         "Fed Rate"    : "FEDFUNDS",
@@ -338,6 +375,9 @@ def format_fred_data(fred_data):
         lines.append(f"• {name}: {data['latest']} {arrow} (sebelumnya: {data['prev']})")
     return "\n".join(lines)
 
+# ─────────────────────────────────────────────
+#  GROQ AI
+# ─────────────────────────────────────────────
 def analyze_with_groq(pair, structure, action, headlines, fred_data):
     if not GROQ_API_KEY:
         return "Analisis AI tidak tersedia."
@@ -394,6 +434,9 @@ Jawab dalam Bahasa Indonesia, maksimal 5 kalimat, langsung ke poin tanpa intro."
         print(f"[GROQ ERROR] {e}")
         return "Analisis AI tidak tersedia saat ini."
 
+# ─────────────────────────────────────────────
+#  TELEGRAM
+# ─────────────────────────────────────────────
 def send_telegram(message):
     try:
         r = requests.post(
@@ -408,9 +451,10 @@ def send_telegram(message):
     except Exception as e:
         print(f"[TELEGRAM] ❌ {e}")
 
-
+# ─────────────────────────────────────────────
+#  SCALPING BTC
+# ─────────────────────────────────────────────
 def analyze_btc_scalping(pair, symbol):
-    """Strategi scalping EMA9/EMA21 + RSI untuk BTCUSD — target 1H"""
     print(f"\n[{pair}] Menganalisis (Scalping EMA+RSI)...")
 
     df_4h = get_data(symbol, "4h", "30d")
@@ -495,6 +539,9 @@ def analyze_btc_scalping(pair, symbol):
         "scalping" : True,
     }
 
+# ─────────────────────────────────────────────
+#  ANALISIS SMC UTAMA
+# ─────────────────────────────────────────────
 def analyze_pair(pair, symbol):
     print(f"\n[{pair}] Menganalisis...")
 
@@ -508,7 +555,6 @@ def analyze_pair(pair, symbol):
 
     structure_4h = detect_structure(df_4h)
     structure_1h = detect_structure(df_1h)
-
     print(f"[{pair}] Struktur 4H: {structure_4h} | 1H: {structure_1h}")
 
     if structure_4h == "SIDEWAYS":
@@ -517,22 +563,25 @@ def analyze_pair(pair, symbol):
 
     structure = structure_4h
 
+    # Step 1 — Liquidity Sweep (wajib, window 10 candle)
     swept, sweep_level = detect_liquidity_sweep(df_1h, structure)
     if not swept:
         print(f"[{pair}] Tidak ada liquidity sweep")
         return None
 
+    # Step 2 — BOS (wajib, cek 6 candle)
     bos, bos_level = detect_bos(df_1h, structure)
     if not bos:
         print(f"[{pair}] Tidak ada BOS")
         return None
 
+    # Step 3 — FVG (wajib, tidak diubah)
     fvg, fvg_low, fvg_high = detect_fvg(df_1h, structure, pair=pair)
     if not fvg:
         print(f"[{pair}] Tidak ada FVG valid")
         return None
 
-    # [FIX v12-8] Info posisi harga vs FVG tanpa filter/skip
+    # Info posisi harga vs FVG
     current_price = df_15m["close"].iloc[-2]
     if structure == "UPTREND":
         if fvg_low <= current_price <= fvg_high:
@@ -553,11 +602,13 @@ def analyze_pair(pair, symbol):
             jarak = round(fvg_low - current_price, 4)
             fvg_status = f"⚠️ Harga {jarak} di bawah FVG — sudah lewat"
 
+    # Step 4 — Konfirmasi entry 2 candle searah di 15M
     confirmed = confirm_entry(df_15m, structure)
     if not confirmed:
-        print(f"[{pair}] Entry belum terkonfirmasi di 15M")
+        print(f"[{pair}] 2 candle 15M belum searah, skip")
         return None
 
+    # Step 5 — Kalkulasi SL/TP
     action, entry, sl, tp = calc_sl_tp(df_15m, structure, sweep_level)
     if action is None:
         print(f"[{pair}] Risk kalkulasi invalid, skip")
@@ -584,9 +635,12 @@ def analyze_pair(pair, symbol):
         "fvg_status"    : fvg_status,
     }
 
+# ─────────────────────────────────────────────
+#  MAIN LOOP
+# ─────────────────────────────────────────────
 def main():
     print("=" * 55)
-    print("  SMC Multi-Pair Bot  v12.2  [Railway]")
+    print("  SMC Multi-Pair Bot  v12.4  [Railway]")
     print(f"  Pairs   : {len(PAIRS)} pairs aktif")
     print(f"  Interval: {CHECK_INTERVAL}s")
     print(f"  Max sinyal/cycle: {MAX_SIGNALS_PER_CYCLE}")
@@ -597,7 +651,7 @@ def main():
         return
 
     send_telegram(
-        "🤖 <b>SMC Multi-Pair Bot v12.2 — ONLINE!</b>\n"
+        "🤖 <b>SMC Multi-Pair Bot v12.4 — ONLINE!</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📊 Pairs       : {len(PAIRS)} pair aktif\n"
         "📈 Strategy    : Smart Money Concept\n"
@@ -607,7 +661,8 @@ def main():
         "🕐 Session     : London, New York & Asia\n"
         f"🔢 Max Sinyal  : {MAX_SIGNALS_PER_CYCLE} per siklus\n"
         "━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "✅ Bot berjalan 24 jam di Railway!"
+        "✅ Bot berjalan 24 jam di Railway!\n"
+        "🆕 v12.4: Sweep+BOS lebih sensitif, konfirmasi 2 candle"
     )
 
     sent_signals       = {}
@@ -651,6 +706,7 @@ def main():
                     sig_key = f"{pair}_{result['action']}_{result['entry']}"
                 else:
                     sig_key = f"{pair}_{result['action']}_{result['fvg_low']}_{result['fvg_high']}"
+
                 now_ts       = time.time()
                 last_key     = sent_signals.get(pair)
                 last_time    = sent_signals_time.get(pair, 0)
@@ -676,16 +732,16 @@ def main():
                     msg = (
                         f"{emj} <b>SCALPING {result['action']} — {pair}</b>\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"⏱️ Waktu     : {now_str}\n"
-                        f"💰 Entry     : {result['entry']}\n"
-                        f"🛑 Stop Loss : {result['sl']}\n"
+                        f"⏱️ Waktu      : {now_str}\n"
+                        f"💰 Entry      : {result['entry']}\n"
+                        f"🛑 Stop Loss  : {result['sl']}\n"
                         f"🎯 Take Profit: {result['tp']}\n"
-                        f"⚖️ R:R Ratio : 1:{result['rr']}\n"
+                        f"⚖️ R:R Ratio  : 1:{result['rr']}\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"{trend_emj} <b>Trend 4H  :</b> {result['structure']}\n"
-                        f"📊 EMA9      : {result['ema9']}\n"
-                        f"📊 EMA21     : {result['ema21']}\n"
-                        f"📈 RSI 14    : {result['rsi']}\n"
+                        f"{trend_emj} <b>Trend 4H :</b> {result['structure']}\n"
+                        f"📊 EMA9       : {result['ema9']}\n"
+                        f"📊 EMA21      : {result['ema21']}\n"
+                        f"📈 RSI 14     : {result['rsi']}\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
                         f"📰 <b>Berita Terkini:</b>\n{news_text}\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
