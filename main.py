@@ -756,54 +756,51 @@ def analyze_pair(pair, symbol):
     print(f"\n{'='*10} [{pair}] {'='*10}")
     print(f"[{pair}] Menganalisis...")
 
-    df_4h  = get_data(symbol, "4h",  "60d")
     df_1h  = get_data(symbol, "1h",  "7d")
     df_15m = get_data(symbol, "15m", "2d")
+    df_5m  = get_data(symbol, "5m",  "1d")
 
-    if df_4h is None:
-        print(f"[{pair}] Data 4H tidak tersedia, skip")
-        return None
     if df_1h is None:
         print(f"[{pair}] Data 1H tidak tersedia, skip")
         return None
     if df_15m is None:
         print(f"[{pair}] Data 15M tidak tersedia, skip")
         return None
-
-    structure_4h = detect_structure(df_4h)
-    structure_1h = detect_structure(df_1h)
-
-    print(f"[{pair}] Struktur 4H: {structure_4h} | 1H: {structure_1h}")
-
-    # Skip hanya kalau KEDUANYA sideways
-    if structure_4h == "SIDEWAYS" and structure_1h == "SIDEWAYS":
-        print(f"[{pair}] 4H & 1H keduanya SIDEWAYS → NO TRADE")
+    if df_5m is None:
+        print(f"[{pair}] Data 5M tidak tersedia, skip")
         return None
 
-    # Prioritas 4H, fallback ke 1H kalau 4H sideways
-    if structure_4h != "SIDEWAYS":
-        structure = structure_4h
-    else:
-        structure = structure_1h
-        print(f"[{pair}] 4H SIDEWAYS → pakai struktur 1H: {structure_1h}")
+    structure_1h  = detect_structure(df_1h)
+    structure_15m = detect_structure(df_15m)
 
-    swept, sweep_level = detect_liquidity_sweep(df_1h, structure)
+    print(f"[{pair}] Struktur 1H: {structure_1h} | 15M: {structure_15m}")
+
+    if structure_1h == "SIDEWAYS" and structure_15m == "SIDEWAYS":
+        print(f"[{pair}] 1H & 15M keduanya SIDEWAYS → NO TRADE")
+        return None
+
+    if structure_1h != "SIDEWAYS":
+        structure = structure_1h
+    else:
+        structure = structure_15m
+        print(f"[{pair}] 1H SIDEWAYS → pakai struktur 15M: {structure_15m}")
+
+    swept, sweep_level = detect_liquidity_sweep(df_15m, structure)
     if not swept:
         print(f"[{pair}] Tidak ada liquidity sweep")
         return None
 
-    bos, bos_level = detect_bos(df_1h, structure)
+    bos, bos_level = detect_bos(df_15m, structure)
     if not bos:
         print(f"[{pair}] Tidak ada BOS")
         return None
 
-    fvg, fvg_low, fvg_high = detect_fvg(df_1h, structure, pair=pair)
+    fvg, fvg_low, fvg_high = detect_fvg(df_15m, structure, pair=pair)
     if not fvg:
         print(f"[{pair}] Tidak ada FVG valid")
         return None
 
-    # [FIX v12-8] Info posisi harga vs FVG tanpa filter/skip
-    current_price = df_15m["close"].iloc[-2]
+    current_price = df_5m["close"].iloc[-2]
     if structure == "UPTREND":
         if fvg_low <= current_price <= fvg_high:
             fvg_status = "✅ Harga di dalam FVG — entry sekarang"
@@ -823,12 +820,12 @@ def analyze_pair(pair, symbol):
             jarak = round(fvg_low - current_price, 4)
             fvg_status = f"⚠️ Harga {jarak} di bawah FVG — sudah lewat"
 
-    confirmed = confirm_entry(df_15m, structure)
+    confirmed = confirm_entry(df_5m, structure)
     if not confirmed:
-        print(f"[{pair}] Entry belum terkonfirmasi di 15M")
+        print(f"[{pair}] Entry belum terkonfirmasi di 5M")
         return None
 
-    action, entry, sl, tp, sl_pip_val, tp_pip_val = calc_sl_tp(df_15m, structure, sweep_level, pair)
+    action, entry, sl, tp, sl_pip_val, tp_pip_val = calc_sl_tp(df_5m, structure, sweep_level, pair)
     if action is None:
         print(f"[{pair}] Risk kalkulasi invalid, skip")
         return None
@@ -848,14 +845,14 @@ def analyze_pair(pair, symbol):
         "sl_pip"        : sl_pip_val,
         "tp_pip"        : tp_pip_val,
         "structure"     : structure,
-        "structure_1h"  : structure_1h,
+        "structure_15m" : structure_15m,
         "sweep"         : sweep_level,
         "bos"           : bos_level,
         "fvg_low"       : fvg_low,
         "fvg_high"      : fvg_high,
         "fvg_status"    : fvg_status,
-    }
-
+          }
+  
 def main():
     print("=" * 55)
     print("  SMC Multi-Pair Bot  v12.6  [Railway]")
@@ -985,8 +982,8 @@ def main():
                         f"🎯 Take Profit    : {result['tp']}  (+{result.get('tp_pip', '?')} pip)\n"
                         f"⚖️ R:R Ratio      : 1:{result['rr']}\n"
                         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"{trend_emj} <b>Struktur 4H :</b> {result['structure']}\n"
-                        f"📊 <b>Struktur 1H :</b> {result['structure_1h']}\n"
+                        f"{trend_emj} <b>Struktur 1H :</b> {result['structure']}\n"
+                        f"📊 <b>Struktur 15M:</b> {result['structure_15m']}\n"
                         f"💧 Liquidity Sweep : {result['sweep']}\n"
                         f"🔀 BOS Level       : {result['bos']}\n"
                         f"📦 FVG Zone        : {result['fvg_low']} – {result['fvg_high']}\n"
